@@ -1,0 +1,75 @@
+# .github/workflows/update-ffmpeg.yml
+name: Update FFmpeg Binaries
+
+on:
+  schedule:
+    # Run every Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update-ffmpeg:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download latest FFmpeg
+        run: |
+          # Download ffmpeg-release-essentials (contains ffmpeg.exe and ffprobe.exe)
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg-full.zip"
+          
+          # Extract the zip
+          Expand-Archive -Path "ffmpeg-full.zip" -DestinationPath "ffmpeg-temp" -Force
+          
+          # Find the bin directory (it's nested inside a versioned folder)
+          $binDir = Get-ChildItem -Path "ffmpeg-temp" -Recurse -Directory -Filter "bin" | Select-Object -First 1
+          
+          # Create output directory
+          New-Item -ItemType Directory -Force -Path "ffmpeg-output"
+          
+          # Copy only ffmpeg.exe and ffprobe.exe
+          Copy-Item "$($binDir.FullName)\ffmpeg.exe" -Destination "ffmpeg-output\"
+          Copy-Item "$($binDir.FullName)\ffprobe.exe" -Destination "ffmpeg-output\"
+          
+          # Create the final zip
+          Compress-Archive -Path "ffmpeg-output\*" -DestinationPath "ffmpeg-bin.zip" -Force
+          
+          # Cleanup
+          Remove-Item "ffmpeg-full.zip" -Force
+          Remove-Item "ffmpeg-temp" -Recurse -Force
+          Remove-Item "ffmpeg-output" -Recurse -Force
+        shell: pwsh
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git diff --exit-code ffmpeg-bin.zip || echo "changed=true" >> $GITHUB_OUTPUT
+        shell: bash
+        continue-on-error: true
+      
+      - name: Commit and push if changed
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ffmpeg-bin.zip
+          git commit -m "chore: update ffmpeg binaries to latest version"
+          git push
+        shell: bash
+      
+      - name: Create summary
+        run: |
+          if [ "${{ steps.check_changes.outputs.changed }}" == "true" ]; then
+            echo "✅ FFmpeg binaries updated successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No changes detected - binaries are up to date" >> $GITHUB_STEP_SUMMARY
+          fi
+        shell: bash
